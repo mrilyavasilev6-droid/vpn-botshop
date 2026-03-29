@@ -819,391 +819,386 @@ def get_user_router() -> Router:
             pass
                 # ИСПРАВЛЕННАЯ ФУНКЦИЯ: process_successful_payment (Marzban)
     # Это самая важная функция - замените её полностью
-
-    async def process_successful_payment(bot: Bot, metadata: dict):
-        try:
-            action = metadata.get('action')
-            user_id = int(metadata.get('user_id'))
-            price = float(metadata.get('price'))
-            months = int(metadata.get('months', 0))
-            key_id = int(metadata.get('key_id', 0)) if metadata.get('key_id') is not None else 0
-            host_name = metadata.get('host_name', '')
-            plan_id = int(metadata.get('plan_id', 0)) if metadata.get('plan_id') is not None else 0
-            customer_email = metadata.get('customer_email')
-            payment_method = metadata.get('payment_method')
-
-            chat_id_to_delete = metadata.get('chat_id')
-            message_id_to_delete = metadata.get('message_id')
-            
-        except (ValueError, TypeError) as e:
-            logger.error(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось разобрать метаданные. Ошибка: {e}. Метаданные: {metadata}")
-            return
-
-        if chat_id_to_delete and message_id_to_delete:
-            try:
-                await bot.delete_message(chat_id=chat_id_to_delete, message_id=message_id_to_delete)
-            except TelegramBadRequest as e:
-                logger.warning(f"Не удалось удалить сообщение о платеже: {e}")
-
-        # Спец-ветка: пополнение баланса
-        if action == "top_up":
-            try:
-                ok = add_to_balance(user_id, float(price))
-            except Exception as e:
-                logger.error(f"Не удалось добавить к балансу для пользователя {user_id}: {e}", exc_info=True)
-                ok = False
-            try:
-                user_info = get_user(user_id)
-                log_username = user_info.get('username', 'N/A') if user_info else 'N/A'
-                log_transaction(
-                    username=log_username,
-                    transaction_id=None,
-                    payment_id=str(uuid.uuid4()),
-                    user_id=user_id,
-                    status='paid',
-                    amount_rub=float(price),
-                    amount_currency=None,
-                    currency_name=None,
-                    payment_method=payment_method or 'Unknown',
-                    metadata=json.dumps({"action": "top_up"})
-                )
-            except Exception:
-                pass
-            try:
-                current_balance = 0.0
-                try:
-                    current_balance = float(get_balance(user_id))
-                except Exception:
-                    pass
-                if ok:
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=(
-                            f"✅ Оплата получена!\n"
-                            f"💼 Баланс пополнен на {float(price):.2f} RUB.\n"
-                            f"Текущий баланс: {current_balance:.2f} RUB."
-                        ),
-                        reply_markup=keyboards.create_profile_keyboard()
-                    )
-                else:
-                    await bot.send_message(
-                        chat_id=user_id,
-                        text=(
-                            "⚠️ Оплата получена, но не удалось обновить баланс. "
-                            "Обратитесь в поддержку."
-                        ),
-                        reply_markup=keyboards.create_support_keyboard()
-                    )
-            except Exception:
-                pass
-            try:
-                admins = [u for u in (get_all_users() or []) if is_admin(u.get('telegram_id') or 0)]
-                for a in admins:
-                    admin_id = a.get('telegram_id')
-                    if admin_id:
-                        await bot.send_message(admin_id, f"📥 Пополнение: пользователь {user_id}, сумма {float(price):.2f} RUB")
-            except Exception:
-                pass
-            return
-
-        processing_message = await bot.send_message(
-            chat_id=user_id,
-            text=f"✅ Оплата получена! Обрабатываю ваш запрос..."
-        )
+async def process_successful_payment(bot: Bot, metadata: dict):
+    try:
+        action = metadata.get('action')
+        user_id = int(metadata.get('user_id'))
+        price = float(metadata.get('price'))
+        months = int(metadata.get('months', 0))
+        key_id = int(metadata.get('key_id', 0)) if metadata.get('key_id') is not None else 0
+        host_name = metadata.get('host_name', '')
+        plan_id = int(metadata.get('plan_id', 0)) if metadata.get('plan_id') is not None else 0
+        customer_email = metadata.get('customer_email')
+        payment_method = metadata.get('payment_method')
+        chat_id_to_delete = metadata.get('chat_id')
+        message_id_to_delete = metadata.get('message_id')
         
+    except (ValueError, TypeError) as e:
+        logger.error(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось разобрать метаданные. Ошибка: {e}. Метаданные: {metadata}")
+        return
+
+    if chat_id_to_delete and message_id_to_delete:
         try:
-            marzban = get_marzban_client()
-            result = None
-            subscription_link = None
-            
-            if action == "new":
-                # Создание нового пользователя
-                user_data = get_user(user_id) or {}
-                raw_username = (user_data.get('username') or f'user{user_id}').lower()
-                username_slug = re.sub(r"[^a-z0-9._-]", "_", raw_username).strip("_")[:16] or f"user{user_id}"
-                base_local = f"{username_slug}"
-                candidate_local = base_local
-                attempt = 1
-                while True:
-                    marzban_username = f"{candidate_local}_{int(datetime.now().timestamp())}"
-                    existing = await marzban.get_user(marzban_username)
-                    if not existing:
-                        break
-                    attempt += 1
-                    candidate_local = f"{base_local}-{attempt}"
-                    if attempt > 100:
-                        marzban_username = f"{base_local}_{int(datetime.now().timestamp())}"
-                        break
-                
-                user_result = await marzban.create_user(
-                    username=marzban_username,
-                    expire_days=int(months * 30),
-                    data_limit_gb=0
-                )
-                
-                if not user_result:
-                    await processing_message.edit_text("❌ Не удалось создать пользователя в панели.")
-                    return
-                
-                subscription_link = await marzban.get_subscription_link(marzban_username)
-                expiry_timestamp_ms = user_result.get('expire', 0) * 1000
-                
-                key_id = add_new_key(
-                    user_id=user_id,
-                    host_name=host_name,
-                    xui_client_uuid=marzban_username,
-                    key_email=f"{marzban_username}@marzban.local",
-                    expiry_timestamp_ms=expiry_timestamp_ms
-                )
-                
-                result = {
-                    'client_uuid': marzban_username,
-                    'expiry_timestamp_ms': expiry_timestamp_ms,
-                    'connection_string': subscription_link
-                }
-                
-            elif action == "extend":
-                # Продление существующего ключа
-                existing_key = get_key_by_id(key_id)
-                if not existing_key:
-                    await processing_message.edit_text("❌ Не удалось найти ключ для продления.")
-                    return
-                
-                marzban_username = existing_key.get('xui_client_uuid')
-                if not marzban_username:
-                    await processing_message.edit_text("❌ Не удалось найти пользователя в панели.")
-                    return
-                
-                user_result = await marzban.update_user_expiry(marzban_username, int(months * 30))
-                subscription_link = await marzban.get_subscription_link(marzban_username)
-                expiry_timestamp_ms = user_result.get('expire', 0) * 1000
-                
-                update_key_info(key_id, marzban_username, expiry_timestamp_ms)
-                
-                result = {
-                    'client_uuid': marzban_username,
-                    'expiry_timestamp_ms': expiry_timestamp_ms,
-                    'connection_string': subscription_link
-                }
-            else:
-                await processing_message.edit_text("❌ Неизвестное действие.")
-                return
+            await bot.delete_message(chat_id=chat_id_to_delete, message_id=message_id_to_delete)
+        except TelegramBadRequest as e:
+            logger.warning(f"Не удалось удалить сообщение о платеже: {e}")
 
-            if not result:
-                await processing_message.edit_text("❌ Не удалось обработать запрос.")
-                return
-
-            # Начисляем реферальное вознаграждение
-            user_data = get_user(user_id)
-            referrer_id = user_data.get('referred_by') if user_data else None
-            if referrer_id:
-                try:
-                    referrer_id = int(referrer_id)
-                except Exception:
-                    logger.warning(f"Referral: invalid referrer_id={referrer_id} for user {user_id}")
-                    referrer_id = None
-                    
-            if referrer_id:
-                try:
-                    reward_type = (get_setting("referral_reward_type") or "percent_purchase").strip()
-                except Exception:
-                    reward_type = "percent_purchase"
-                reward = Decimal("0")
-                if reward_type == "fixed_start_referrer":
-                    reward = Decimal("0")
-                elif reward_type == "fixed_purchase":
-                    try:
-                        amount_raw = get_setting("fixed_referral_bonus_amount") or "50"
-                        reward = Decimal(str(amount_raw)).quantize(Decimal("0.01"))
-                    except Exception:
-                        reward = Decimal("50.00")
-                else:
-                    try:
-                        percentage = Decimal(get_setting("referral_percentage") or "0")
-                    except Exception:
-                        percentage = Decimal("0")
-                    reward = (Decimal(str(price)) * percentage / 100).quantize(Decimal("0.01"))
-                    
-                if float(reward) > 0:
-                    try:
-                        add_to_balance(referrer_id, float(reward))
-                        add_to_referral_balance_all(referrer_id, float(reward))
-                        referrer_username = user_data.get('username', 'пользователь') if user_data else 'пользователь'
-                        try:
-                            await bot.send_message(
-                                chat_id=referrer_id,
-                                text=(
-                                    "💰 Вам начислено реферальное вознаграждение!\n"
-                                    f"Пользователь: {referrer_username} (ID: {user_id})\n"
-                                    f"Сумма: {float(reward):.2f} RUB"
-                                )
-                            )
-                        except Exception as e:
-                            logger.warning(f"Could not send referral reward notification to {referrer_id}: {e}")
-                    except Exception as e:
-                        logger.warning(f"Referral: failed to add reward for referrer {referrer_id}: {e}")
-
-            # Обновляем статистику пользователя
-            try:
-                pm_lower = (payment_method or '').strip().lower()
-            except Exception:
-                pm_lower = ''
-            spent_for_stats = 0.0 if pm_lower == 'balance' else float(price)
-            update_user_stats(user_id, spent_for_stats, months)
-            
-            # Логируем транзакцию
+    # Спец-ветка: пополнение баланса
+    if action == "top_up":
+        try:
+            ok = add_to_balance(user_id, float(price))
+        except Exception as e:
+            logger.error(f"Не удалось добавить к балансу для пользователя {user_id}: {e}", exc_info=True)
+            ok = False
+        try:
             user_info = get_user(user_id)
             log_username = user_info.get('username', 'N/A') if user_info else 'N/A'
-            log_metadata = json.dumps({
-                "plan_id": plan_id,
-                "plan_name": get_plan_by_id(plan_id).get('plan_name', 'Unknown') if get_plan_by_id(plan_id) else 'Unknown',
-                "host_name": host_name,
-                "customer_email": customer_email
-            })
-            payment_id_for_log = metadata.get('payment_id') or str(uuid.uuid4())
             log_transaction(
                 username=log_username,
                 transaction_id=None,
-                payment_id=payment_id_for_log,
+                payment_id=str(uuid.uuid4()),
                 user_id=user_id,
                 status='paid',
                 amount_rub=float(price),
                 amount_currency=None,
                 currency_name=None,
                 payment_method=payment_method or 'Unknown',
-                metadata=log_metadata
+                metadata=json.dumps({"action": "top_up"})
+            )
+        except Exception:
+            pass
+        try:
+            current_balance = 0.0
+            try:
+                current_balance = float(get_balance(user_id))
+            except Exception:
+                pass
+            if ok:
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"✅ Оплата получена!\n"
+                        f"💼 Баланс пополнен на {float(price):.2f} RUB.\n"
+                        f"Текущий баланс: {current_balance:.2f} RUB."
+                    ),
+                    reply_markup=keyboards.create_profile_keyboard()
+                )
+            else:
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        "⚠️ Оплата получена, но не удалось обновить баланс. "
+                        "Обратитесь в поддержку."
+                    ),
+                    reply_markup=keyboards.create_support_keyboard()
+                )
+        except Exception:
+            pass
+        try:
+            admins = [u for u in (get_all_users() or []) if is_admin(u.get('telegram_id') or 0)]
+            for a in admins:
+                admin_id = a.get('telegram_id')
+                if admin_id:
+                    await bot.send_message(admin_id, f"📥 Пополнение: пользователь {user_id}, сумма {float(price):.2f} RUB")
+        except Exception:
+            pass
+        return
+
+    processing_message = await bot.send_message(
+        chat_id=user_id,
+        text=f"✅ Оплата получена! Обрабатываю ваш запрос..."
+    )
+    
+    try:
+        marzban = get_marzban_client()
+        result = None
+        subscription_link = None
+        
+        if action == "new":
+            # Создание нового пользователя
+            user_data = get_user(user_id) or {}
+            raw_username = (user_data.get('username') or f'user{user_id}').lower()
+            username_slug = re.sub(r"[^a-z0-9._-]", "_", raw_username).strip("_")[:16] or f"user{user_id}"
+            base_local = f"{username_slug}"
+            candidate_local = base_local
+            attempt = 1
+            while True:
+                marzban_username = f"{candidate_local}_{int(datetime.now().timestamp())}"
+                existing = await marzban.get_user(marzban_username)
+                if not existing:
+                    break
+                attempt += 1
+                candidate_local = f"{base_local}-{attempt}"
+                if attempt > 100:
+                    marzban_username = f"{base_local}_{int(datetime.now().timestamp())}"
+                    break
+            
+            user_result = await marzban.create_user(
+                username=marzban_username,
+                expire_days=int(months * 30),
+                data_limit_gb=0
             )
             
-            # Обработка промокода
+            if not user_result:
+                await processing_message.edit_text("❌ Не удалось создать пользователя в панели.")
+                return
+            
+            subscription_link = await marzban.get_subscription_link(marzban_username)
+            expiry_timestamp_ms = user_result.get('expire', 0) * 1000
+            
+            key_id = add_new_key(
+                user_id=user_id,
+                host_name=host_name,
+                xui_client_uuid=marzban_username,
+                key_email=f"{marzban_username}@marzban.local",
+                expiry_timestamp_ms=expiry_timestamp_ms
+            )
+            
+            result = {
+                'client_uuid': marzban_username,
+                'expiry_timestamp_ms': expiry_timestamp_ms,
+                'connection_string': subscription_link
+            }
+            
+        elif action == "extend":
+            # Продление существующего ключа
+            existing_key = get_key_by_id(key_id)
+            if not existing_key:
+                await processing_message.edit_text("❌ Не удалось найти ключ для продления.")
+                return
+            
+            marzban_username = existing_key.get('xui_client_uuid')
+            if not marzban_username:
+                await processing_message.edit_text("❌ Не удалось найти пользователя в панели.")
+                return
+            
+            user_result = await marzban.update_user_expiry(marzban_username, int(months * 30))
+            subscription_link = await marzban.get_subscription_link(marzban_username)
+            expiry_timestamp_ms = user_result.get('expire', 0) * 1000
+            
+            update_key_info(key_id, marzban_username, expiry_timestamp_ms)
+            
+            result = {
+                'client_uuid': marzban_username,
+                'expiry_timestamp_ms': expiry_timestamp_ms,
+                'connection_string': subscription_link
+            }
+        else:
+            await processing_message.edit_text("❌ Неизвестное действие.")
+            return
+
+        if not result:
+            await processing_message.edit_text("❌ Не удалось обработать запрос.")
+            return
+
+        # Начисляем реферальное вознаграждение
+        user_data = get_user(user_id)
+        referrer_id = user_data.get('referred_by') if user_data else None
+        if referrer_id:
             try:
-                promo_code_used = (metadata.get('promo_code') or '').strip()
-                if promo_code_used:
+                referrer_id = int(referrer_id)
+            except Exception:
+                logger.warning(f"Referral: invalid referrer_id={referrer_id} for user {user_id}")
+                referrer_id = None
+                
+        if referrer_id:
+            try:
+                reward_type = (get_setting("referral_reward_type") or "percent_purchase").strip()
+            except Exception:
+                reward_type = "percent_purchase"
+            reward = Decimal("0")
+            if reward_type == "fixed_start_referrer":
+                reward = Decimal("0")
+            elif reward_type == "fixed_purchase":
+                try:
+                    amount_raw = get_setting("fixed_referral_bonus_amount") or "50"
+                    reward = Decimal(str(amount_raw)).quantize(Decimal("0.01"))
+                except Exception:
+                    reward = Decimal("50.00")
+            else:
+                try:
+                    percentage = Decimal(get_setting("referral_percentage") or "0")
+                except Exception:
+                    percentage = Decimal("0")
+                reward = (Decimal(str(price)) * percentage / 100).quantize(Decimal("0.01"))
+                
+            if float(reward) > 0:
+                try:
+                    add_to_balance(referrer_id, float(reward))
+                    add_to_referral_balance_all(referrer_id, float(reward))
+                    referrer_username = user_data.get('username', 'пользователь') if user_data else 'пользователь'
                     try:
-                        applied_amt = 0.0
-                        try:
-                            if metadata.get('promo_discount_amount') is not None:
-                                applied_amt = float(metadata.get('promo_discount_amount') or 0.0)
-                        except Exception:
-                            applied_amt = 0.0
-                        redeemed = redeem_promo_code(
-                            promo_code_used,
-                            user_id,
-                            applied_amount=float(applied_amt or 0.0),
-                            order_id=payment_id_for_log,
+                        await bot.send_message(
+                            chat_id=referrer_id,
+                            text=(
+                                "💰 Вам начислено реферальное вознаграждение!\n"
+                                f"Пользователь: {referrer_username} (ID: {user_id})\n"
+                                f"Сумма: {float(reward):.2f} RUB"
+                            )
                         )
-                        if redeemed:
-                            limit_total = redeemed.get('usage_limit_total')
-                            per_user_limit = redeemed.get('usage_limit_per_user')
-                            used_total_now = redeemed.get('used_total') or 0
-                            user_usage_count = redeemed.get('user_usage_count')
-                            should_deactivate = False
-                            reason_lines = []
+                    except Exception as e:
+                        logger.warning(f"Could not send referral reward notification to {referrer_id}: {e}")
+                except Exception as e:
+                    logger.warning(f"Referral: failed to add reward for referrer {referrer_id}: {e}")
 
-                            if limit_total:
-                                try:
-                                    if used_total_now >= int(limit_total):
-                                        should_deactivate = True
-                                        reason_lines.append("достигнут общий лимит использования")
-                                except Exception:
-                                    pass
+        # Обновляем статистику пользователя
+        try:
+            pm_lower = (payment_method or '').strip().lower()
+        except Exception:
+            pm_lower = ''
+        spent_for_stats = 0.0 if pm_lower == 'balance' else float(price)
+        update_user_stats(user_id, spent_for_stats, months)
+        
+        # Логируем транзакцию
+        user_info = get_user(user_id)
+        log_username = user_info.get('username', 'N/A') if user_info else 'N/A'
+        log_metadata = json.dumps({
+            "plan_id": plan_id,
+            "plan_name": get_plan_by_id(plan_id).get('plan_name', 'Unknown') if get_plan_by_id(plan_id) else 'Unknown',
+            "host_name": host_name,
+            "customer_email": customer_email
+        })
+        payment_id_for_log = metadata.get('payment_id') or str(uuid.uuid4())
+        log_transaction(
+            username=log_username,
+            transaction_id=None,
+            payment_id=payment_id_for_log,
+            user_id=user_id,
+            status='paid',
+            amount_rub=float(price),
+            amount_currency=None,
+            currency_name=None,
+            payment_method=payment_method or 'Unknown',
+            metadata=log_metadata
+        )
+        
+        # Обработка промокода
+        try:
+            promo_code_used = (metadata.get('promo_code') or '').strip()
+            if promo_code_used:
+                try:
+                    applied_amt = 0.0
+                    try:
+                        if metadata.get('promo_discount_amount') is not None:
+                            applied_amt = float(metadata.get('promo_discount_amount') or 0.0)
+                    except Exception:
+                        applied_amt = 0.0
+                    redeemed = redeem_promo_code(
+                        promo_code_used,
+                        user_id,
+                        applied_amount=float(applied_amt or 0.0),
+                        order_id=payment_id_for_log,
+                    )
+                    if redeemed:
+                        limit_total = redeemed.get('usage_limit_total')
+                        per_user_limit = redeemed.get('usage_limit_per_user')
+                        used_total_now = redeemed.get('used_total') or 0
+                        user_usage_count = redeemed.get('user_usage_count')
+                        should_deactivate = False
+                        reason_lines = []
 
-                            if per_user_limit:
-                                try:
-                                    if (user_usage_count or 0) >= int(per_user_limit):
-                                        should_deactivate = True
-                                        reason_lines.append("исчерпан лимит на пользователя")
-                                except Exception:
-                                    pass
-
-                            if not should_deactivate and (limit_total or per_user_limit):
-                                should_deactivate = True
-                                if per_user_limit and not reason_lines:
-                                    reason_lines.append("лимит на пользователя выставлен (код погашён)")
-                                elif limit_total and not reason_lines:
-                                    reason_lines.append("лимит по количеству использований выставлен (код погашён)")
-
-                            if should_deactivate:
-                                try:
-                                    update_promo_code_status(promo_code_used, is_active=False)
-                                except Exception:
-                                    pass
-
+                        if limit_total:
                             try:
-                                plan = get_plan_by_id(plan_id)
-                                plan_name = plan.get('plan_name', 'Unknown') if plan else 'Unknown'
-                                admins = list(get_admin_ids() or [])
-                                if should_deactivate:
-                                    status_line = "Статус: деактивирован"
-                                    if reason_lines:
-                                        status_line += " (" + ", ".join(reason_lines) + ")"
-                                else:
-                                    status_line = "Статус: активен"
-                                    if limit_total:
-                                        status_line += f" (использовано {used_total_now} из {limit_total})"
-                                    else:
-                                        status_line += f" (использовано {used_total_now})"
-                                text = (
-                                    "🎟️ Промокод использован\n"
-                                    f"Код: {promo_code_used}\n"
-                                    f"Пользователь: {user_id}\n"
-                                    f"Тариф: {plan_name} ({months} мес.)\n"
-                                    f"{status_line}"
-                                )
-                                for aid in admins:
-                                    try:
-                                        await bot.send_message(int(aid), text)
-                                    except Exception:
-                                        pass
+                                if used_total_now >= int(limit_total):
+                                    should_deactivate = True
+                                    reason_lines.append("достигнут общий лимит использования")
                             except Exception:
                                 pass
-                    except Exception as e:
-                        logger.warning(f"Promo redeem failed for user {user_id}, code {promo_code_used}: {e}")
-            except Exception:
-                pass
-            
-            # Удаляем служебное сообщение
-            try:
-                await processing_message.delete()
-            except Exception:
-                pass
-            
-            connection_string = result.get('connection_string')
-            new_expiry_date = datetime.fromtimestamp(result['expiry_timestamp_ms'] / 1000)
-            
-            all_user_keys = get_user_keys(user_id)
-            key_number = len(all_user_keys)
-            
-            final_text = get_purchase_success_text(
-                action="создан" if action == "new" else "продлен",
-                key_number=key_number,
-                expiry_date=new_expiry_date,
-                connection_string=connection_string or ""
-            )
-            
-            await bot.send_message(
-                chat_id=user_id,
-                text=final_text,
-                reply_markup=keyboards.create_key_info_keyboard(key_id)
-            )
-            
-            try:
-                await notify_admin_of_purchase(bot, metadata)
-            except Exception as e:
-                logger.warning(f"Failed to notify admin of purchase: {e}")
-            
+
+                        if per_user_limit:
+                            try:
+                                if (user_usage_count or 0) >= int(per_user_limit):
+                                    should_deactivate = True
+                                    reason_lines.append("исчерпан лимит на пользователя")
+                            except Exception:
+                                pass
+
+                        if not should_deactivate and (limit_total or per_user_limit):
+                            should_deactivate = True
+                            if per_user_limit and not reason_lines:
+                                reason_lines.append("лимит на пользователя выставлен (код погашён)")
+                            elif limit_total and not reason_lines:
+                                reason_lines.append("лимит по количеству использований выставлен (код погашён)")
+
+                        if should_deactivate:
+                            try:
+                                update_promo_code_status(promo_code_used, is_active=False)
+                            except Exception:
+                                pass
+
+                        try:
+                            plan = get_plan_by_id(plan_id)
+                            plan_name = plan.get('plan_name', 'Unknown') if plan else 'Unknown'
+                            admins = list(get_admin_ids() or [])
+                            if should_deactivate:
+                                status_line = "Статус: деактивирован"
+                                if reason_lines:
+                                    status_line += " (" + ", ".join(reason_lines) + ")"
+                            else:
+                                status_line = "Статус: активен"
+                                if limit_total:
+                                    status_line += f" (использовано {used_total_now} из {limit_total})"
+                                else:
+                                    status_line += f" (использовано {used_total_now})"
+                            text = (
+                                "🎟️ Промокод использован\n"
+                                f"Код: {promo_code_used}\n"
+                                f"Пользователь: {user_id}\n"
+                                f"Тариф: {plan_name} ({months} мес.)\n"
+                                f"{status_line}"
+                            )
+                            for aid in admins:
+                                try:
+                                    await bot.send_message(int(aid), text)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.warning(f"Promo redeem failed for user {user_id}, code {promo_code_used}: {e}")
+        except Exception:
+            pass
+        
+        # Удаляем служебное сообщение
+        try:
+            await processing_message.delete()
+        except Exception:
+            pass
+        
+        connection_string = result.get('connection_string')
+        new_expiry_date = datetime.fromtimestamp(result['expiry_timestamp_ms'] / 1000)
+        
+        all_user_keys = get_user_keys(user_id)
+        key_number = len(all_user_keys)
+        
+        final_text = get_purchase_success_text(
+            action="создан" if action == "new" else "продлен",
+            key_number=key_number,
+            expiry_date=new_expiry_date,
+            connection_string=connection_string or ""
+        )
+        
+        await bot.send_message(
+            chat_id=user_id,
+            text=final_text,
+            reply_markup=keyboards.create_key_info_keyboard(key_id)
+        )
+        
+        try:
+            await notify_admin_of_purchase(bot, metadata)
         except Exception as e:
-            logger.error(f"Error processing payment for user {user_id}: {e}", exc_info=True)
+            logger.warning(f"Failed to notify admin of purchase: {e}")
+        
+    except Exception as e:
+        logger.error(f"Error processing payment for user {user_id}: {e}", exc_info=True)
+        try:
+            await processing_message.edit_text("❌ Ошибка при выдаче ключа.")
+        except Exception:
             try:
-                await processing_message.edit_text("❌ Ошибка при выдаче ключа.")
+                await bot.send_message(chat_id=user_id, text="❌ Ошибка при выдаче ключа.")
             except Exception:
-                try:
-                    await bot.send_message(chat_id=user_id, text="❌ Ошибка при выдаче ключа.")
-                except Exception:
-                    pass
-
-    return user_router
-
-
+                pass
+   
 # Вспомогательные функции (остаются без изменений)
 async def _create_heleket_payment_request(
     user_id: int,
