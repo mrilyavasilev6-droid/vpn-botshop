@@ -192,7 +192,7 @@ def get_user_router() -> Router:
             return int(stars)
         except Exception:
             return int(float(stars))
-                @user_router.message(CommandStart())
+    @user_router.message(CommandStart())
     async def start_handler(message: types.Message, state: FSMContext, bot: Bot, command: CommandObject):
         user_id = message.from_user.id
         username = message.from_user.username or message.from_user.full_name
