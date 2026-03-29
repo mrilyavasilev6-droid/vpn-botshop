@@ -1,15 +1,20 @@
 FROM python:3.11-slim
 
-# Переходим в папку проекта
+# Устанавливаем рабочую директорию
+WORKDIR /app
+
+# 1. КОПИРУЕМ все файлы из репозитория в образ (ЭТОТ ШАГ БЫЛ ПРОПУЩЕН)
+COPY . .
+
+# 2. Переходим в папку, где лежит pyproject.toml
 WORKDIR /app/VPN-main
 
-# Устанавливаем зависимости
+# 3. Обновляем pip и устанавливаем проект
 RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir .
 
-# Добавляем папку src в пути поиска Python, чтобы он видел пакет shop_bot
+# 4. Настраиваем пути поиска Python
 ENV PYTHONPATH="/app/VPN-main/src:${PYTHONPATH}"
 
-# Запуск модуля через флаг -m
-# Это эквивалентно запуску файла src/shop_bot/__main__.py
+# 5. Запускаем модуль
 CMD ["python", "-m", "shop_bot"]
