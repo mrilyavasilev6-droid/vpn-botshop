@@ -481,7 +481,7 @@ def get_user_router() -> Router:
             "Введите сумму пополнения в рублях (например, 300):\nМинимум: 10 RUB, максимум: 100000 RUB",
         )
         await state.set_state(TopUpProcess.waiting_for_amount)
-            @user_router.callback_query(F.data == "manage_keys")
+    @user_router.callback_query(F.data == "manage_keys")
     @registration_required
     async def manage_keys_handler(callback: types.CallbackQuery):
         await callback.answer()
