@@ -1,18 +1,15 @@
 FROM python:3.11-slim
 
-WORKDIR /app
-
-# Копируем вообще всё, что есть в репозитории
-COPY . .
-
-# Переходим именно в ту папку, где лежит ваш pyproject.toml
-# Если папка называется VPN-main, то переходим в неё
+# Переходим в папку проекта
 WORKDIR /app/VPN-main
 
-# Теперь pip точно увидит файл в текущей директории
+# Устанавливаем зависимости
 RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir .
 
-# Запуск. Если главный файл лежит в VPN-main, запускаем его
-# Если файл называется иначе (например, main.py), замените bot.py
-CMD ["python", "bot.py"]
+# Добавляем папку src в пути поиска Python, чтобы он видел пакет shop_bot
+ENV PYTHONPATH="/app/VPN-main/src:${PYTHONPATH}"
+
+# Запуск модуля через флаг -m
+# Это эквивалентно запуску файла src/shop_bot/__main__.py
+CMD ["python", "-m", "shop_bot"]
