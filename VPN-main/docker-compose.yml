@@ -1,9 +1,23 @@
+version: '3.8'
+
 services:
   3xui-shopbot:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
+    container_name: 3xui-shopbot
     ports:
       - '1488:1488'
     volumes:
-      - .:/app/project
-    container_name: 3xui-shopbot
+      # Храним базу данных отдельно от кода (в созданной вами папке на VPS)
+      - /opt/vpn-bot/data:/app/data
+      # Если вам нужно править код "на лету" без пересборки, можно оставить это:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      # Указываем боту, где именно искать базу внутри контейнера
+      - DB_PATH=/app/data/users.db
+    env_file:
+      - src/shop_bot/.env
