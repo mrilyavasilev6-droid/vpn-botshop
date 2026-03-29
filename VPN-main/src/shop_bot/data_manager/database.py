@@ -4,7 +4,22 @@ import logging
 from pathlib import Path
 import json
 import re
+import os
+from pathlib import Path
 
+# Пытаемся взять путь из переменных окружения, если нет - используем локальный путь
+DATABASE_URL = os.environ.get("DATABASE_PATH")
+
+if DATABASE_URL:
+    DB_FILE = Path(DATABASE_URL)
+else:
+    # Локальная разработка: база будет лежать рядом с кодом
+    DB_FILE = Path(__file__).parent.parent.parent.parent / "users.db"
+
+# Создаем родительские папки, если их нет
+DB_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+logger.info(f"Используется файл базы данных: {DB_FILE}")
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path("/app/project")
