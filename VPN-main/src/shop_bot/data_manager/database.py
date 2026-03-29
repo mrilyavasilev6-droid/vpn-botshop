@@ -8,14 +8,14 @@ import os
 from pathlib import Path
 
 # Пытаемся взять путь из переменных окружения, если нет - используем локальный путь
-DATABASE_URL = os.environ.get("DATABASE_PATH")
+DATABASE_URL = os.environ.get("DB_PATH") # В docker-compose мы указали DB_PAT
 
 if DATABASE_URL:
     DB_FILE = Path(DATABASE_URL)
 else:
     # Локальная разработка: база будет лежать рядом с кодом
-    DB_FILE = Path(__file__).parent.parent.parent.parent / "users.db"
-
+ PROJECT_ROOT = Path("/app/project")
+    DB_FILE = PROJECT_ROOT / "users.db"
 # Создаем родительские папки, если их нет
 DB_FILE.parent.mkdir(parents=True, exist_ok=True)
 
