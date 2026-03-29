@@ -5,5 +5,7 @@ RUN python3 -m venv .venv
 ENV PATH="/app/.venv/bin:$PATH"
 COPY . /app/project/
 WORKDIR /app/project
+# Добавляем установку драйвера вручную:
+RUN pip install --no-cache-dir aiosqlite 
 RUN pip install --no-cache-dir -e .
 CMD ["python3", "-m", "shop_bot"]
